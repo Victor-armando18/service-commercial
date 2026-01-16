@@ -1,0 +1,7 @@
+[
+  {"sku": "PROD-001", "name": "Arroz 1kg", "value": 1200.0, "category": "Alimento"},
+  {"sku": "PROD-002", "name": "Óleo Alimentar", "value": 2500.0, "category": "Alimento"},
+  {"sku": "PROD-003", "name": "iPhone 13", "value": 250000.0, "category": "Eletrónica"},
+  {"sku": "PROD-004", "name": "iPhone 14", "value": 850000.0, "category": "Eletrónica"},
+  {"sku": "PROD-005", "name": "iPhone 15", "value": 1500000.0, "category": "Eletrónica"}
+]

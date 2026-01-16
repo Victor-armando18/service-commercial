@@ -7,6 +7,7 @@ import (
 
 type Order struct {
 	ID                 string             `json:"id"`
+	Currency           string             `json:"currency"` // AOA, USD, BRL, EUR
 	BaseValue          float64            `json:"baseValue"`
 	Items              []OrderItem        `json:"items"`
 	AppliedTaxes       map[string]float64 `json:"appliedTaxes"`

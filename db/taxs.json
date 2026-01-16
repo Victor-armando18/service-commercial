@@ -1,0 +1,4 @@
+[
+  {"id": "VAT", "name": "IVA (Geral)", "rate": 0.14},
+  {"id": "IEC", "name": "Imposto Especial Consumo", "rate": 0.02}
+]
