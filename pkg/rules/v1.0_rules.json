@@ -1,0 +1,46 @@
+{
+  "version": "v1.0",
+  "description": "Regras base para o motor comercial",
+  "rules": [
+    {
+      "id": "R_BASE_001",
+      "phase": "baseline",
+      "logic": { "var": "order.BaseValue" },
+      "output_key": "order.BaseValue"
+    },
+    {
+      "id": "R_TAX_VAT_001",
+      "phase": "taxes",
+      "logic": {
+        "if": [
+          { "==": [{ "var": "order.ID" }, "TARGET_ID_123"] },
+          { "*": [0.20, { "var": "order.BaseValue" }] },
+          0
+        ]
+      },
+      "output_key": "order.AppliedTaxes.VAT"
+    },
+    {
+      "id": "R_ALLOC_001",
+      "phase": "allocation",
+      "logic": { "allocate": [{ "var": "order.BaseValue" }, 5] }, 
+      "output_key": "allocation_result"
+    },
+    {
+      "id": "R_GUARD_MIN_ITEMS",
+      "phase": "guards",
+      "logic": {
+        "<": [{ "var": "order.TotalItems" }, 1]
+      },
+      "output_key": "Guard_MinItems"
+    },
+    {
+      "id": "R_GUARD_MAX_DISCOUNT",
+      "phase": "guards",
+      "logic": {
+        ">": [{ "var": "order.DiscountPercentage" }, 0.15]
+      },
+      "output_key": "Guard_MaxDiscount"
+    }
+  ]
+}

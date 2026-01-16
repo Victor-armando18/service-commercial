@@ -3,34 +3,40 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 
-	"service-commercial/internal/domain/model"
-	"service-commercial/internal/infrastructure/yaml"
-	"service-commercial/internal/interfaces"
+	"github.com/Victor-armando18/service-commercial/internal/domain"
+	"github.com/Victor-armando18/service-commercial/internal/infrastructure"
+	"github.com/Victor-armando18/service-commercial/internal/usecase"
 )
 
 func main() {
-	pack, err := yaml.LoadRulePack("rules/commercial-v1.yml")
-	if err != nil {
-		log.Fatal(err)
-	}
+	loader := infrastructure.NewFileRuleLoader()
+	executor := infrastructure.NewJsonLogicExecutor()
 
-	order := model.Order{
-		ID: "ORDER-001",
-		Items: []model.Item{
-			{SKU: "SKU-1", Quantity: 2, Price: 100},
-			{SKU: "SKU-2", Quantity: 1, Price: 300},
+	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
+	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
+
+	engine := usecase.NewEngineService(loader, executor)
+	ctx := context.Background()
+
+	// Cenário usando OrderItems
+	order := domain.Order{
+		ID: "TARGET_ID_123",
+		Items: []domain.OrderItem{
+			{SKU: "IPHONE-15", Value: 1000.0, Qty: 1},
+			{SKU: "CASE-PRO", Value: 50.0, Qty: 2},
 		},
+		DiscountPercentage: 0.10,
 	}
 
-	result, err := interfaces.RunEngine(context.Background(), order, pack)
-	if err != nil {
-		log.Fatal(err)
-	}
+	res, _ := engine.RunEngine(ctx, order, "v1.0")
 
-	fmt.Printf("STATE: %+v\n", result.StateFragment)
-	fmt.Printf("DELTA: %+v\n", result.Delta)
-	fmt.Printf("REASONS: %+v\n", result.Reasons)
-	fmt.Printf("VERSION: %s\n", result.RulesVersion)
+	fmt.Printf("Pedido: %s\n", res.FinalOrder.ID)
+	fmt.Printf("Itens Totais calculados: %d\n", res.FinalOrder.TotalItems)
+	fmt.Printf("Valor Base calculado: %.2f\n", res.FinalOrder.BaseValue)
+	fmt.Printf("Impostos Aplicados: %v\n", res.FinalOrder.AppliedTaxes)
+
+	for _, log := range res.ExecutionLog {
+		fmt.Printf(" -> [%s] Rule: %s applied\n", log.Phase, log.RuleID)
+	}
 }
