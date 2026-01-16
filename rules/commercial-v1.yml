@@ -1,0 +1,42 @@
+version: "2026.01"
+
+rules:
+  - id: compute_subtotal
+    phase: baseline
+    logic:
+      set:
+        - "$.totals.SubTotal"
+        - sum:
+          - foreach:
+              var: "$.order.Items"
+              do:
+                "*":
+                  - "$.Quantity"
+                  - "$.Price"
+
+  - id: discount
+    phase: allocation
+    logic:
+      set:
+        - "$.totals.Discount"
+        - "*":
+            - "$.totals.SubTotal"
+            - 0.1
+
+  - id: grand_total
+    phase: totals
+    logic:
+      set:
+        - "$.totals.GrandTotal"
+        - "-":
+            - "$.totals.SubTotal"
+            - "$.totals.Discount"
+
+
+guards:
+  - id: total_positive
+    reason: "Total must be positive"
+    logic:
+      ">":
+        - "$.totals.GrandTotal"
+        - 0
