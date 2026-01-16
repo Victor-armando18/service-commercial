@@ -1,46 +1,34 @@
 {
   "version": "v1.0",
-  "description": "Regras base para o motor comercial",
+  "description": "Regras comerciais v1.0 com suporte a itens e operadores customizados",
   "rules": [
     {
-      "id": "R_BASE_001",
+      "id": "R_APPLY_DISCOUNT",
       "phase": "baseline",
-      "logic": { "var": "order.BaseValue" },
+      "logic": {
+        "*": [
+          { "var": "order.BaseValue" },
+          { "-": [1, { "var": "order.DiscountPercentage" }] }
+        ]
+      },
       "output_key": "order.BaseValue"
     },
     {
-      "id": "R_TAX_VAT_001",
+      "id": "R_TAX_VAT",
       "phase": "taxes",
-      "logic": {
-        "if": [
-          { "==": [{ "var": "order.ID" }, "TARGET_ID_123"] },
-          { "*": [0.20, { "var": "order.BaseValue" }] },
-          0
-        ]
-      },
+      "logic": { "*": [0.20, { "var": "order.BaseValue" }] },
       "output_key": "order.AppliedTaxes.VAT"
     },
     {
-      "id": "R_ALLOC_001",
-      "phase": "allocation",
-      "logic": { "allocate": [{ "var": "order.BaseValue" }, 5] }, 
-      "output_key": "allocation_result"
-    },
-    {
-      "id": "R_GUARD_MIN_ITEMS",
-      "phase": "guards",
+      "id": "R_FINAL_TOTAL",
+      "phase": "totals",
       "logic": {
-        "<": [{ "var": "order.TotalItems" }, 1]
+        "+": [
+          { "var": "order.BaseValue" },
+          { "var": "order.AppliedTaxes.VAT" }
+        ]
       },
-      "output_key": "Guard_MinItems"
-    },
-    {
-      "id": "R_GUARD_MAX_DISCOUNT",
-      "phase": "guards",
-      "logic": {
-        ">": [{ "var": "order.DiscountPercentage" }, 0.15]
-      },
-      "output_key": "Guard_MaxDiscount"
+      "output_key": "order.TotalValue"
     }
   ]
 }

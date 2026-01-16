@@ -42,6 +42,7 @@ type RuleConfig struct {
 	Phase     string                 `json:"phase"`      // Ex: "baseline", "allocation", "tax", "guards"
 	Logic     map[string]interface{} `json:"logic"`      // JsonLogic structure
 	OutputKey string                 `json:"output_key"` // Onde armazenar o resultado (Ex: order.AppliedTaxes.VAT)
+	ErrorMessage string      `json:"error_message,omitempty"`
 }
 
 type EngineResult struct {

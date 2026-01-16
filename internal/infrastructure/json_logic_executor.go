@@ -27,16 +27,18 @@ func (j *JsonLogicExecutor) RegisterCustomOperator(name string, logic func(args 
 }
 
 func (j *JsonLogicExecutor) Execute(ctx context.Context, ruleData map[string]interface{}, contextVars map[string]interface{}) (interface{}, error) {
+	// 1. Tentar execução por Operadores Customizados (Customização manual)
 	for opName, fn := range j.customOps {
 		if args, ok := ruleData[opName]; ok {
 			return j.handleManualEval(args, contextVars, fn), nil
 		}
 	}
 
+	// 2. Execução Standard JsonLogic
 	ruleJSON, _ := json.Marshal(ruleData)
 	dataJSON, _ := json.Marshal(contextVars)
-
 	var resultBuffer bytes.Buffer
+
 	err := jsonlogic.Apply(strings.NewReader(string(ruleJSON)), strings.NewReader(string(dataJSON)), &resultBuffer)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", interfaces.ErrRuleExecutionFailed, err)
@@ -67,23 +69,32 @@ func (j *JsonLogicExecutor) resolveVar(arg interface{}, data map[string]interfac
 	if !ok {
 		return arg
 	}
-	varPath, ok := m["var"].(string)
+	path, ok := m["var"].(string)
 	if !ok {
 		return arg
 	}
 
 	order, _ := data["order"].(map[string]interface{})
-	switch varPath {
+
+	switch path {
 	case "order.BaseValue":
 		return order["BaseValue"]
-	case "order.TotalItems":
-		return order["TotalItems"]
 	case "order.DiscountPercentage":
 		return order["DiscountPercentage"]
+	case "order.TotalItems":
+		return order["TotalItems"]
 	case "order.ID":
 		return order["ID"]
 	}
-	return arg
+
+	// Resolução de impostos aninhados
+	if strings.HasPrefix(path, "order.AppliedTaxes.") {
+		taxKey := strings.TrimPrefix(path, "order.AppliedTaxes.")
+		if taxes, ok := order["AppliedTaxes"].(map[string]float64); ok {
+			return taxes[taxKey]
+		}
+	}
+	return 0.0
 }
 
 func CustomRound(args ...interface{}) interface{} {

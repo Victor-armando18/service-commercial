@@ -1,0 +1,37 @@
+{
+  "version": "v1.1",
+  "description": "Regras com Guardas Ativas",
+  "rules": [
+    {
+      "id": "R_APPLY_DISCOUNT",
+      "phase": "baseline",
+      "logic": {
+        "*": [
+          { "var": "order.BaseValue" },
+          { "-": [1, { "var": "order.DiscountPercentage" }] }
+        ]
+      },
+      "output_key": "order.BaseValue"
+    },
+    {
+      "id": "R_TAX_VAT",
+      "phase": "taxes",
+      "logic": { "*": [0.20, { "var": "order.BaseValue" }] },
+      "output_key": "order.AppliedTaxes.VAT"
+    },
+    {
+      "id": "R_GUARD_MAX_DISCOUNT",
+      "phase": "guards",
+      "logic": { ">": [{ "var": "order.DiscountPercentage" }, 0.15] },
+      "output_key": "Guard_DiscountExcessive",
+      "error_message": "O desconto aplicado excede o limite comercial permitido de 15%."
+    },
+    {
+      "id": "R_GUARD_MIN_VALUE",
+      "phase": "guards",
+      "logic": { "<": [{ "var": "order.BaseValue" }, 50.0] },
+      "output_key": "Guard_ValueTooLow",
+      "error_message": "O valor líquido do pedido está abaixo do faturamento mínimo de 50.00."
+    }
+  ]
+}
