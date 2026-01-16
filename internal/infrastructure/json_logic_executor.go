@@ -27,29 +27,52 @@ func (j *JsonLogicExecutor) RegisterCustomOperator(name string, logic func(args 
 }
 
 func (j *JsonLogicExecutor) Execute(ctx context.Context, ruleData map[string]interface{}, contextVars map[string]interface{}) (interface{}, error) {
-	// 1. Tentar execução por Operadores Customizados (Customização manual)
+	// 1. Verificar se é um operador customizado direto
 	for opName, fn := range j.customOps {
 		if args, ok := ruleData[opName]; ok {
 			return j.handleManualEval(args, contextVars, fn), nil
 		}
 	}
 
-	// 2. Execução Standard JsonLogic
-	ruleJSON, _ := json.Marshal(ruleData)
-	dataJSON, _ := json.Marshal(contextVars)
-	var resultBuffer bytes.Buffer
+	// 2. Preparação do Contexto (Crucial para o JsonLogic)
+	// Convertemos a struct Order para um mapa puro com chaves JSON minúsculas
+	var cleanContext map[string]interface{}
+	rawContext, _ := json.Marshal(contextVars)
+	json.Unmarshal(rawContext, &cleanContext)
 
-	err := jsonlogic.Apply(strings.NewReader(string(ruleJSON)), strings.NewReader(string(dataJSON)), &resultBuffer)
+	ruleJSON, _ := json.Marshal(ruleData)
+
+	var resultBuffer bytes.Buffer
+	// Aplicamos o JsonLogic usando o contexto limpo
+	err := jsonlogic.Apply(bytes.NewReader(ruleJSON), bytes.NewReader(rawContext), &resultBuffer)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", interfaces.ErrRuleExecutionFailed, err)
 	}
 
-	var res interface{}
-	if resultBuffer.Len() == 0 || resultBuffer.String() == "null" {
+	resultStr := resultBuffer.String()
+	if resultStr == "" || resultStr == "null" {
 		return nil, nil
 	}
-	json.Unmarshal(resultBuffer.Bytes(), &res)
-	return res, nil
+
+	// 3. Decodificação do resultado com UseNumber para manter precisão decimal
+	var res interface{}
+	decoder := json.NewDecoder(strings.NewReader(resultStr))
+	decoder.UseNumber()
+	if err := decoder.Decode(&res); err != nil {
+		return nil, err
+	}
+
+	// Converter json.Number para float64 ou bool conforme necessário
+	return j.finalizeValue(res), nil
+}
+
+func (j *JsonLogicExecutor) finalizeValue(val interface{}) interface{} {
+	if n, ok := val.(json.Number); ok {
+		if f, err := n.Float64(); err == nil {
+			return f
+		}
+	}
+	return val
 }
 
 func (j *JsonLogicExecutor) handleManualEval(args interface{}, data map[string]interface{}, fn func(args ...interface{}) interface{}) interface{} {
@@ -69,52 +92,77 @@ func (j *JsonLogicExecutor) resolveVar(arg interface{}, data map[string]interfac
 	if !ok {
 		return arg
 	}
+
 	path, ok := m["var"].(string)
 	if !ok {
 		return arg
 	}
 
-	order, _ := data["order"].(map[string]interface{})
+	// Normalização profunda para busca manual
+	var cleanData map[string]interface{}
+	b, _ := json.Marshal(data)
+	json.Unmarshal(b, &cleanData)
 
-	switch path {
-	case "order.BaseValue":
-		return order["BaseValue"]
-	case "order.DiscountPercentage":
-		return order["DiscountPercentage"]
-	case "order.TotalItems":
-		return order["TotalItems"]
-	case "order.ID":
-		return order["ID"]
+	order, _ := cleanData["order"].(map[string]interface{})
+	if order == nil {
+		return 0.0
 	}
 
-	// Resolução de impostos aninhados
-	if strings.HasPrefix(path, "order.AppliedTaxes.") {
-		taxKey := strings.TrimPrefix(path, "order.AppliedTaxes.")
-		if taxes, ok := order["AppliedTaxes"].(map[string]float64); ok {
-			return taxes[taxKey]
+	// Navegação por pontos (ex: order.baseValue ou order.appliedTaxes.VAT)
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return 0.0
+	}
+
+	var current interface{} = order
+	for i := 1; i < len(parts); i++ {
+		if m, ok := current.(map[string]interface{}); ok {
+			current = m[parts[i]]
+		} else {
+			return 0.0
 		}
 	}
-	return 0.0
+
+	if n, ok := current.(json.Number); ok {
+		f, _ := n.Float64()
+		return f
+	}
+	if f, ok := current.(float64); ok {
+		return f
+	}
+
+	return current
 }
 
 func CustomRound(args ...interface{}) interface{} {
 	if len(args) == 0 {
 		return 0.0
 	}
-	if v, ok := args[0].(float64); ok {
-		return math.Round(v)
-	}
-	return args[0]
+	v := reflectToFloat(args[0])
+	return math.Round(v)
 }
 
 func CustomAllocate(args ...interface{}) interface{} {
 	if len(args) < 2 {
 		return 0.0
 	}
-	val, _ := args[0].(float64)
-	parts, _ := args[1].(float64)
+	val := reflectToFloat(args[0])
+	parts := reflectToFloat(args[1])
 	if parts == 0 {
 		return 0.0
 	}
 	return val / parts
+}
+
+func reflectToFloat(i interface{}) float64 {
+	switch v := i.(type) {
+	case float64:
+		return v
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case int:
+		return float64(v)
+	}
+	return 0.0
 }

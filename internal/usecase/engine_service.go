@@ -19,67 +19,73 @@ func NewEngineService(loader interfaces.RulePackLoader, executor interfaces.Rule
 }
 
 func (e *EngineService) RunEngine(ctx context.Context, initialOrder domain.Order, version string) (*domain.EngineResult, error) {
+	// Garantir que a versão tem o prefixo "v"
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
 	rulePack, err := e.loader.Load(ctx, version)
 	if err != nil {
 		return nil, err
 	}
 
-	currentOrder := initialOrder
-	e.hydrateData(&currentOrder)
+	workingOrder := initialOrder
+	e.hydrateData(&workingOrder)
+
+	// Snapshot inicial dos campos que rastreamos
+	initialSnapshot := e.takeSnapshot(workingOrder)
 
 	executionLog := []domain.ExecutionStep{}
 	guardsHit := []domain.GuardViolation{}
 
-	phases := []string{"baseline", "allocation", "taxes", "totals", "guards"}
+	// IMPORTANTE: Estas fases devem existir no JSON
+	phases := []string{"baseline", "orderAdjust", "allocation", "taxes", "totals", "guards"}
 
 	for _, phase := range phases {
 		rules := e.getRules(rulePack.Rules, phase)
 		for _, rule := range rules {
-			oldValue := e.getValue(rule.OutputKey, &currentOrder)
-
-			out, err := e.executor.Execute(ctx, rule.Logic, map[string]interface{}{"order": currentOrder})
+			out, err := e.executor.Execute(ctx, rule.Logic, map[string]interface{}{"order": workingOrder})
 			if err != nil {
 				continue
 			}
+
 			if phase == "guards" {
 				if v, ok := out.(bool); ok && v {
-					// Captura a mensagem personalizada da regra ou usa uma padrão
-					msg := rule.ErrorMessage
-					if msg == "" {
-						msg = "Condição restritiva atingida"
-					}
-
 					guardsHit = append(guardsHit, domain.GuardViolation{
 						RuleID:  rule.ID,
 						Reason:  "Violation Detected",
-						Context: msg, // Agora vem direto do JSON!
+						Context: rule.ErrorMessage,
 					})
 				}
 				continue
 			}
 
-			e.applyUpdate(rule.OutputKey, out, &currentOrder)
-
-			newValue := e.getValue(rule.OutputKey, &currentOrder)
-
+			e.applyUpdate(rule.OutputKey, out, &workingOrder)
 			executionLog = append(executionLog, domain.ExecutionStep{
-				Phase:  phase,
-				RuleID: rule.ID,
-				Action: fmt.Sprintf("Changed %s: [%.2f -> %.2f]", rule.OutputKey, oldValue, newValue),
+				Phase:   phase,
+				RuleID:  rule.ID,
+				Action:  "compute",
+				Message: fmt.Sprintf("Updated %s", rule.OutputKey),
 			})
 		}
 	}
 
-	finalTotal := currentOrder.BaseValue
-	for _, taxValue := range currentOrder.AppliedTaxes {
-		finalTotal += taxValue
+	// Recálculo autoritativo do Total
+	finalTotal := workingOrder.BaseValue
+	for _, v := range workingOrder.AppliedTaxes {
+		finalTotal += v
 	}
+	workingOrder.TotalValue = finalTotal
+
+	finalSnapshot := e.takeSnapshot(workingOrder)
+	fragment := e.generateStateFragment(initialSnapshot, finalSnapshot)
 
 	return &domain.EngineResult{
-		FinalOrder:   currentOrder,
-		TotalValue:   finalTotal,
-		GuardsHit:    guardsHit,
-		ExecutionLog: executionLog,
+		StateFragment: fragment,
+		ServerDelta:   len(fragment) > 0,
+		RulesVersion:  version,
+		ExecutionLog:  executionLog,
+		GuardsHit:     guardsHit,
 	}, nil
 }
 
@@ -91,9 +97,8 @@ func (e *EngineService) hydrateData(order *domain.Order) {
 		v += i.Value * float64(i.Qty)
 	}
 	order.TotalItems = q
-	if order.BaseValue == 0 {
-		order.BaseValue = v
-	}
+	// O BaseValue inicial é a soma bruta dos itens
+	order.BaseValue = v
 }
 
 func (e *EngineService) getRules(rules []domain.RuleConfig, phase string) []domain.RuleConfig {
@@ -106,20 +111,6 @@ func (e *EngineService) getRules(rules []domain.RuleConfig, phase string) []doma
 	return f
 }
 
-func (e *EngineService) getValue(key string, order *domain.Order) float64 {
-	if key == "order.BaseValue" {
-		return order.BaseValue
-	}
-	if strings.HasPrefix(key, "order.AppliedTaxes.") {
-		k := strings.TrimPrefix(key, "order.AppliedTaxes.")
-		if order.AppliedTaxes == nil {
-			return 0
-		}
-		return order.AppliedTaxes[k]
-	}
-	return 0
-}
-
 func (e *EngineService) applyUpdate(key string, val interface{}, order *domain.Order) {
 	var f float64
 	switch v := val.(type) {
@@ -127,19 +118,38 @@ func (e *EngineService) applyUpdate(key string, val interface{}, order *domain.O
 		f = v
 	case int:
 		f = float64(v)
-	case int64:
-		f = float64(v)
 	default:
 		return
 	}
 
-	if key == "order.BaseValue" {
+	// Alinhado com as tags JSON e chaves do ficheiro de regras
+	if key == "order.baseValue" {
 		order.BaseValue = f
-	} else if strings.HasPrefix(key, "order.AppliedTaxes.") {
-		t := strings.TrimPrefix(key, "order.AppliedTaxes.")
+	} else if strings.HasPrefix(key, "order.appliedTaxes.") {
+		t := strings.TrimPrefix(key, "order.appliedTaxes.")
 		if order.AppliedTaxes == nil {
 			order.AppliedTaxes = make(map[string]float64)
 		}
 		order.AppliedTaxes[t] = f
 	}
+}
+
+func (e *EngineService) takeSnapshot(o domain.Order) map[string]interface{} {
+	snap := make(map[string]interface{})
+	snap["baseValue"] = o.BaseValue
+	snap["totalValue"] = o.TotalValue
+	for k, v := range o.AppliedTaxes {
+		snap["appliedTaxes."+k] = v
+	}
+	return snap
+}
+
+func (e *EngineService) generateStateFragment(before, after map[string]interface{}) map[string]interface{} {
+	fragment := make(map[string]interface{})
+	for k, vAfter := range after {
+		if vBefore, ok := before[k]; !ok || vBefore != vAfter {
+			fragment[k] = vAfter
+		}
+	}
+	return fragment
 }

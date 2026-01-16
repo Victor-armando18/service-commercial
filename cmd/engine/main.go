@@ -8,21 +8,28 @@ import (
 	"github.com/Victor-armando18/service-commercial/internal/infrastructure"
 	"github.com/Victor-armando18/service-commercial/internal/usecase"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 func main() {
 	e := echo.New()
+	e.Use(middleware.RequestLogger())
+	e.Use(middleware.Recover())
 
 	loader := infrastructure.NewFileRuleLoader()
 	executor := infrastructure.NewJsonLogicExecutor()
-	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
+
+	// Registro de operadores customizados da seção 7.3 da doc
 	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
+	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
+
 	engine := usecase.NewEngineService(loader, executor)
 
+	// Endpoint autoritativo /validate (MVP conforme seção 14)
 	e.POST("/orders", func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
 		}
 
 		version := c.QueryParam("version")
