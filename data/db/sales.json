@@ -88,5 +88,25 @@
     "totalValue": 301440,
     "rulesVersion": "v1.1",
     "correlationId": "CORR-SAL-301811"
+  },
+  {
+    "id": "SALE-1768832918070",
+    "currency": "AOA",
+    "baseValue": 222500,
+    "items": [
+      {
+        "sku": "PROD-003",
+        "value": 250000,
+        "qty": 1
+      }
+    ],
+    "appliedTaxes": {
+      "VAT": 44500
+    },
+    "totalItems": 0,
+    "discountPercentage": 0.11,
+    "totalValue": 267000,
+    "rulesVersion": "v1.1",
+    "correlationId": "CORR-SALE-1768832918070"
   }
 ]

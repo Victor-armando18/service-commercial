@@ -39,7 +39,7 @@ func (l *FileRuleLoader) Load(ctx context.Context, version string) (*domain.Rule
 	}
 
 	filename := fmt.Sprintf("%s_rules.json", version)
-	path := filepath.Join("pkg", "rules", filename)
+	path := filepath.Join("data", "rules", filename)
 
 	data, err := os.ReadFile(path)
 	if err != nil {

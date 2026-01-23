@@ -1,0 +1,55 @@
+{
+  "version": "v1.2",
+  "description": "RulePack Enterprise - Full Precision",
+  "rules": [
+    {
+      "id": "R_RECALC_BASE_FROM_ITEMS",
+      "phase": "baseline",
+      "logic": {
+        "round": [
+          {
+            "foreach": [
+              { "var": "order.items" },
+              { "*": [{ "var": "item.value" }, { "var": "item.qty" }] }
+            ]
+          },
+          2
+        ]
+      },
+      "output_key": "order.baseValue"
+    },
+    {
+      "id": "R_APPLY_DISCOUNT",
+      "phase": "orderAdjust",
+      "logic": {
+        "round": [
+          {
+            "*": [
+              { "var": "order.baseValue" },
+              { "-": [1, { "var": "order.discountPercentage" }] }
+            ]
+          },
+          2
+        ]
+      },
+      "output_key": "order.baseValue"
+    },
+    {
+      "id": "R_TAX_VAT_DYNAMIC",
+      "phase": "taxes",
+      "logic": {
+        "round": [
+          {
+            "if": [
+              { "==": [{ "var": "order.currency" }, "AOA"] },
+              { "*": [{ "var": "order.baseValue" }, 0.14] },
+              { "*": [{ "var": "order.baseValue" }, 0.20] }
+            ]
+          },
+          2
+        ]
+      },
+      "output_key": "order.appliedTaxes.VAT"
+    }
+  ]
+}

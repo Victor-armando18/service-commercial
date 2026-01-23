@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/Victor-armando18/service-commercial/internal/domain"
 	"github.com/Victor-armando18/service-commercial/internal/infrastructure"
@@ -40,16 +39,15 @@ func main() {
 	// Endpoint autoritativo /validate (MVP conforme seção 14)
 	e.POST("/orders", func(c echo.Context) error {
 		var order domain.Order
+		// O Bind preenche a struct Order com os dados do corpo da requisição
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid Request"})
 		}
 
-		version := c.QueryParam("version")
+		// Se o front não mandou versão, usamos a v1.1 como default
+		version := order.RulesVersion
 		if version == "" {
-			version = "v1.0"
-		}
-		if !strings.HasPrefix(version, "v") {
-			version = "v" + version
+			version = "v1.1"
 		}
 
 		result, err := engine.RunEngine(c.Request().Context(), order, version)
@@ -57,26 +55,26 @@ func main() {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
+		// Retornamos o objeto de resultado completo.
+		// O StateFragment agora conterá Currency e CorrelationID se eles vierem no POST original.
 		return c.JSON(http.StatusOK, result)
 	})
 
 	e.PATCH("/orders", func(c echo.Context) error {
 		var req PatchRequest
 		if err := c.Bind(&req); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid Patch Request"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
 		}
 
-		// 1. Transformar as operações de patch em []byte para o helper
+		// 1. Aplicar o Patch JSON no estado enviado pelo front
 		patchBytes, _ := json.Marshal(req.Patch)
-
-		// 2. Aplicar o Delta ao pedido original (Autoritativo)
 		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
 		if err != nil {
 			return c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		}
 
-		// 3. Rodar o motor com o pedido atualizado
-		version := c.QueryParam("version")
+		// 2. Executar Motor (A versão v1.1 é padrão se não houver no objeto)
+		version := updatedOrder.RulesVersion
 		if version == "" {
 			version = "v1.1"
 		}
@@ -86,10 +84,6 @@ func main() {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// Adicionar metadados de controle da Doc
-		result.RulesVersion = version
-
-		// Retornar o StateFragment (Seção 4.3 da Doc)
 		return c.JSON(http.StatusOK, result)
 	})
 

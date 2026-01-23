@@ -2,11 +2,13 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/Victor-armando18/service-commercial/internal/domain"
 	"github.com/Victor-armando18/service-commercial/internal/interfaces"
+	jsonpatch "github.com/evanphx/json-patch/v5"
 )
 
 type EngineService struct {
@@ -19,7 +21,6 @@ func NewEngineService(loader interfaces.RulePackLoader, executor interfaces.Rule
 }
 
 func (e *EngineService) RunEngine(ctx context.Context, initialOrder domain.Order, version string) (*domain.EngineResult, error) {
-	// Garantir que a versão tem o prefixo "v"
 	if !strings.HasPrefix(version, "v") {
 		version = "v" + version
 	}
@@ -29,23 +30,22 @@ func (e *EngineService) RunEngine(ctx context.Context, initialOrder domain.Order
 		return nil, err
 	}
 
+	// Preservação total da cópia original
 	workingOrder := initialOrder
+	workingOrder.RulesVersion = version
 	e.hydrateData(&workingOrder)
 
-	// Snapshot inicial dos campos que rastreamos
-	initialSnapshot := e.takeSnapshot(workingOrder)
-
+	initialJSON, _ := json.Marshal(initialOrder)
 	executionLog := []domain.ExecutionStep{}
 	guardsHit := []domain.GuardViolation{}
 
-	// IMPORTANTE: Estas fases devem existir no JSON
 	phases := []string{"baseline", "orderAdjust", "allocation", "taxes", "totals", "guards"}
 
 	for _, phase := range phases {
 		rules := e.getRules(rulePack.Rules, phase)
 		for _, rule := range rules {
 			out, err := e.executor.Execute(ctx, rule.Logic, map[string]interface{}{"order": workingOrder})
-			if err != nil {
+			if err != nil || out == nil {
 				continue
 			}
 
@@ -70,19 +70,23 @@ func (e *EngineService) RunEngine(ctx context.Context, initialOrder domain.Order
 		}
 	}
 
-	// Recálculo autoritativo do Total
-	finalTotal := workingOrder.BaseValue
-	for _, v := range workingOrder.AppliedTaxes {
-		finalTotal += v
+	// Cálculo Final
+	var taxTotal float64
+	for _, val := range workingOrder.AppliedTaxes {
+		taxTotal += val
 	}
-	workingOrder.TotalValue = finalTotal
+	workingOrder.TotalValue = workingOrder.BaseValue + taxTotal
 
-	finalSnapshot := e.takeSnapshot(workingOrder)
-	fragment := e.generateStateFragment(initialSnapshot, finalSnapshot)
+	// Geração do Fragmento (Mantém Currency e CorrelationID se estiverem na workingOrder)
+	finalJSON, _ := json.Marshal(workingOrder)
+	patch, _ := jsonpatch.CreateMergePatch(initialJSON, finalJSON)
+
+	var stateFragment map[string]interface{}
+	json.Unmarshal(finalJSON, &stateFragment)
 
 	return &domain.EngineResult{
-		StateFragment: fragment,
-		ServerDelta:   len(fragment) > 0,
+		StateFragment: stateFragment,
+		ServerDelta:   len(patch) > 2,
 		RulesVersion:  version,
 		ExecutionLog:  executionLog,
 		GuardsHit:     guardsHit,
@@ -97,8 +101,10 @@ func (e *EngineService) hydrateData(order *domain.Order) {
 		v += i.Value * float64(i.Qty)
 	}
 	order.TotalItems = q
-	// O BaseValue inicial é a soma bruta dos itens
-	order.BaseValue = v
+	// Só calculamos o BaseValue se o motor ainda não o definiu via regras
+	if order.BaseValue == 0 {
+		order.BaseValue = v
+	}
 }
 
 func (e *EngineService) getRules(rules []domain.RuleConfig, phase string) []domain.RuleConfig {
@@ -112,44 +118,34 @@ func (e *EngineService) getRules(rules []domain.RuleConfig, phase string) []doma
 }
 
 func (e *EngineService) applyUpdate(key string, val interface{}, order *domain.Order) {
-	var f float64
-	switch v := val.(type) {
-	case float64:
-		f = v
-	case int:
-		f = float64(v)
-	default:
+	f, ok := e.toFloat(val)
+	if !ok {
 		return
 	}
 
-	// Alinhado com as tags JSON e chaves do ficheiro de regras
-	if key == "order.baseValue" {
+	switch {
+	case key == "order.baseValue":
 		order.BaseValue = f
-	} else if strings.HasPrefix(key, "order.appliedTaxes.") {
-		t := strings.TrimPrefix(key, "order.appliedTaxes.")
+	case strings.HasPrefix(key, "order.appliedTaxes."):
+		taxName := strings.TrimPrefix(key, "order.appliedTaxes.")
 		if order.AppliedTaxes == nil {
 			order.AppliedTaxes = make(map[string]float64)
 		}
-		order.AppliedTaxes[t] = f
+		order.AppliedTaxes[taxName] = f
+	case key == "order.totalValue": // Adicionado para suporte a regras de totalização customizadas
+		order.TotalValue = f
 	}
 }
 
-func (e *EngineService) takeSnapshot(o domain.Order) map[string]interface{} {
-	snap := make(map[string]interface{})
-	snap["baseValue"] = o.BaseValue
-	snap["totalValue"] = o.TotalValue
-	for k, v := range o.AppliedTaxes {
-		snap["appliedTaxes."+k] = v
+func (e *EngineService) toFloat(i interface{}) (float64, bool) {
+	switch v := i.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case json.Number:
+		f, _ := v.Float64()
+		return f, true
 	}
-	return snap
-}
-
-func (e *EngineService) generateStateFragment(before, after map[string]interface{}) map[string]interface{} {
-	fragment := make(map[string]interface{})
-	for k, vAfter := range after {
-		if vBefore, ok := before[k]; !ok || vBefore != vAfter {
-			fragment[k] = vAfter
-		}
-	}
-	return fragment
+	return 0, false
 }
