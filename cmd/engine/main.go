@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Victor-armando18/service-commercial/internal/domain"
 	"github.com/Victor-armando18/service-commercial/internal/infrastructure"
@@ -13,130 +15,100 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-type PatchRequest struct {
-	Order domain.Order             `json:"order"`
-	Patch []map[string]interface{} `json:"patch"`
-}
-
 func main() {
 	e := echo.New()
 
-	e.Use(middleware.CORS())
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+	// Middleware de segurança e CORS (Fundamental para PATCH/POST do Front)
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{http.MethodPost, http.MethodPatch, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept},
+	}))
 
-	// Inicialização seguindo estritamente as assinaturas de internal
-	loader := infrastructure.NewFileRuleLoader() // Sem argumentos conforme seu erro
+	loader := infrastructure.NewFileRuleLoader()
 	executor := infrastructure.NewJsonLogicExecutor()
 
-	// Registro de operadores conforme sua infraestrutura internal
-	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
+	// Registro de operadores especializados para o pipeline de 6 fases
 	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
 
-	// Engine service utilizando usecase/internal
 	engineSvc := usecase.NewEngineService(loader, executor)
 
-	e.POST("/orders", handleCalculate(engineSvc))
-	e.PATCH("/orders", handlePatch(engineSvc))
-	e.GET("/products", handleListProducts)
-	e.POST("/sales", handleSale(engineSvc))
+	// Endpoints Profissionais
+	e.POST("/orders", handleCalculate(engineSvc)) // Reconciliação e Cálculo
+	e.POST("/sales", handleSale(engineSvc))       // Enforcement Final e Persistência
 
 	e.Logger.Fatal(e.Start(":8080"))
+}
+
+// PDP Mock: Consulta OPA para obter Capabilities e Constraints
+// Baseado no arquivo authz.rego fornecido: "order.discount.apply"
+func consultOPA(permission string) (bool, float64) {
+	// Simula decisão do OPA: Usuário tem permissão, mas o limite (constraint) é 15% (0.15)
+	if permission == "order.discount.apply" {
+		return true, 0.15
+	}
+	return false, 0
 }
 
 func handleCalculate(svc interfaces.EngineFacade) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
 		}
 
-		version := order.RulesVersion
-		if version == "" {
-			version = "v1.2"
+		// 1. OPA: Validar Constraint de Desconto (PEP Enforcement)
+		allowed, maxDiscount := consultOPA("order.discount.apply")
+		if !allowed || order.DiscountPercentage > maxDiscount {
+			// Retornamos um erro estruturado que o front usará para bloquear a UI
+			return c.JSON(http.StatusForbidden, map[string]interface{}{
+				"error":   "Constraint Violation",
+				"reasons": []string{fmt.Sprintf("O desconto solicitado excede o limite permitido (Máx: %.0f%%)", maxDiscount*100)},
+				"block":   true,
+			})
 		}
 
-		result, err := svc.RunEngine(c.Request().Context(), order, version)
+		// 2. Engine: Executar Pipeline por Fases (Baseline -> OrderAdjust -> Taxes -> Guards)
+		result, err := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
+		// 3. Resposta rica com stateFragment e Guards
 		return c.JSON(http.StatusOK, result)
 	}
-}
-
-func handlePatch(svc interfaces.EngineFacade) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		var req PatchRequest
-		if err := c.Bind(&req); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid patch request"})
-		}
-
-		patchBytes, _ := json.Marshal(req.Patch)
-		// Utiliza a função ApplyOrderPatch de infrastructure que trabalha com domain.Order
-		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
-		if err != nil {
-			return c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
-		}
-
-		version := updatedOrder.RulesVersion
-		if version == "" {
-			version = "v1.2"
-		}
-
-		result, err := svc.RunEngine(c.Request().Context(), updatedOrder, version)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-
-		return c.JSON(http.StatusOK, result)
-	}
-}
-
-func handleListProducts(c echo.Context) error {
-	data, err := os.ReadFile("db/products.json")
-	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Products file not found"})
-	}
-	var products []interface{}
-	json.Unmarshal(data, &products)
-	return c.JSON(http.StatusOK, products)
 }
 
 func handleSale(svc interfaces.EngineFacade) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid sale data"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
 		}
 
-		result, err := svc.RunEngine(c.Request().Context(), order, "v1.2")
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-
+		// Enforcement de Segurança Máxima: Re-executa Guards antes de persistir
+		result, _ := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
 		if len(result.GuardsHit) > 0 {
 			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":  "Sale blocked",
+				"error":  "Security Guard Block",
 				"guards": result.GuardsHit,
 			})
 		}
 
-		// Marshalling do fragmento para a struct final de domínio
-		finalJSON, _ := json.Marshal(result.StateFragment)
-		var finalizedOrder domain.Order
-		json.Unmarshal(finalJSON, &finalizedOrder)
+		// Idempotência e Metadados
+		order.ID = "SALE-" + time.Now().Format("20060102150405")
+		order.CorrelationID = "CORR-" + order.ID
 
-		finalizedOrder.CorrelationID = "CORR-" + finalizedOrder.ID
-
-		// Persistência simples
+		// Persistência em data/db/sales.json
+		filePath := "data/db/sales.json"
 		var sales []domain.Order
-		file, _ := os.ReadFile("db/sales.json")
-		json.Unmarshal(file, &sales)
-		sales = append(sales, finalizedOrder)
-		newData, _ := json.MarshalIndent(sales, "", "  ")
-		os.WriteFile("db/sales.json", newData, 0644)
+		fileData, _ := os.ReadFile(filePath)
+		json.Unmarshal(fileData, &sales)
+		sales = append(sales, order)
 
-		return c.JSON(http.StatusCreated, finalizedOrder)
+		finalJSON, _ := json.MarshalIndent(sales, "", "  ")
+		os.WriteFile(filePath, finalJSON, 0644)
+
+		return c.JSON(http.StatusCreated, order)
 	}
 }
