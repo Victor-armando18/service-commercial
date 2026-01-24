@@ -62,7 +62,7 @@ Estrutura de pastas: data/rules e data/db
 
 Iniciar o Servidor (PEP/Backend)
 ```bash
-go run cmd/server/main.go
+go run cmd/engine/main.go
 ```
 
 Iniciar a Ferramenta de Diagnóstico (CLI)
