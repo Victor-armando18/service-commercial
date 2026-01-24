@@ -7,152 +7,136 @@ import (
 
 	"github.com/Victor-armando18/service-commercial/internal/domain"
 	"github.com/Victor-armando18/service-commercial/internal/infrastructure"
+	"github.com/Victor-armando18/service-commercial/internal/interfaces"
 	"github.com/Victor-armando18/service-commercial/internal/usecase"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
 
 type PatchRequest struct {
-	Order domain.Order            `json:"order"` // Estado atual conhecido pelo front
-	Patch []domain.PatchOperation `json:"patch"` // Deltas (JSON Patch)
+	Order domain.Order             `json:"order"`
+	Patch []map[string]interface{} `json:"patch"`
 }
 
 func main() {
 	e := echo.New()
 
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodPost, http.MethodGet, http.MethodPatch},
-	}))
-	e.Use(middleware.RequestLogger())
+	e.Use(middleware.CORS())
+	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	loader := infrastructure.NewFileRuleLoader()
+	// Inicialização seguindo estritamente as assinaturas de internal
+	loader := infrastructure.NewFileRuleLoader() // Sem argumentos conforme seu erro
 	executor := infrastructure.NewJsonLogicExecutor()
 
-	// Registro de operadores customizados da seção 7.3 da doc
+	// Registro de operadores conforme sua infraestrutura internal
 	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
 	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
 
-	engine := usecase.NewEngineService(loader, executor)
+	// Engine service utilizando usecase/internal
+	engineSvc := usecase.NewEngineService(loader, executor)
 
-	// Endpoint autoritativo /validate (MVP conforme seção 14)
-	e.POST("/orders", func(c echo.Context) error {
+	e.POST("/orders", handleCalculate(engineSvc))
+	e.PATCH("/orders", handlePatch(engineSvc))
+	e.GET("/products", handleListProducts)
+	e.POST("/sales", handleSale(engineSvc))
+
+	e.Logger.Fatal(e.Start(":8080"))
+}
+
+func handleCalculate(svc interfaces.EngineFacade) echo.HandlerFunc {
+	return func(c echo.Context) error {
 		var order domain.Order
-		// O Bind preenche a struct Order com os dados do corpo da requisição
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid Request"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
 		}
 
-		// Se o front não mandou versão, usamos a v1.1 como default
 		version := order.RulesVersion
 		if version == "" {
-			version = "v1.1"
+			version = "v1.2"
 		}
 
-		result, err := engine.RunEngine(c.Request().Context(), order, version)
+		result, err := svc.RunEngine(c.Request().Context(), order, version)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// Retornamos o objeto de resultado completo.
-		// O StateFragment agora conterá Currency e CorrelationID se eles vierem no POST original.
 		return c.JSON(http.StatusOK, result)
-	})
+	}
+}
 
-	e.PATCH("/orders", func(c echo.Context) error {
+func handlePatch(svc interfaces.EngineFacade) echo.HandlerFunc {
+	return func(c echo.Context) error {
 		var req PatchRequest
 		if err := c.Bind(&req); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid patch request"})
 		}
 
-		// 1. Aplicar o Patch JSON no estado enviado pelo front
 		patchBytes, _ := json.Marshal(req.Patch)
+		// Utiliza a função ApplyOrderPatch de infrastructure que trabalha com domain.Order
 		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
 		if err != nil {
 			return c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		}
 
-		// 2. Executar Motor (A versão v1.1 é padrão se não houver no objeto)
 		version := updatedOrder.RulesVersion
 		if version == "" {
-			version = "v1.1"
+			version = "v1.2"
 		}
 
-		result, err := engine.RunEngine(c.Request().Context(), updatedOrder, version)
+		result, err := svc.RunEngine(c.Request().Context(), updatedOrder, version)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
 		return c.JSON(http.StatusOK, result)
-	})
+	}
+}
 
-	// No main.go
-	e.GET("/products", func(c echo.Context) error {
-		data, _ := os.ReadFile("db/products.json")
-		var products []map[string]interface{}
-		json.Unmarshal(data, &products)
-		return c.JSON(http.StatusOK, products)
-	})
+func handleListProducts(c echo.Context) error {
+	data, err := os.ReadFile("db/products.json")
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Products file not found"})
+	}
+	var products []interface{}
+	json.Unmarshal(data, &products)
+	return c.JSON(http.StatusOK, products)
+}
 
-	e.POST("/sales", func(c echo.Context) error {
+func handleSale(svc interfaces.EngineFacade) echo.HandlerFunc {
+	return func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid sale data"})
 		}
 
-		result, err := engine.RunEngine(c.Request().Context(), order, "v1.1")
+		result, err := svc.RunEngine(c.Request().Context(), order, "v1.2")
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Engine Error"})
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// 1. Verificação de Guardas
 		if len(result.GuardsHit) > 0 {
 			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":  "Venda Bloqueada",
-				"reason": result.GuardsHit[0].Context,
+				"error":  "Sale blocked",
+				"guards": result.GuardsHit,
 			})
 		}
 
-		// 2. Cálculo de Fallback para Subtotal (Caso o motor retorne nil)
-		var manualBase float64
-		for _, item := range order.Items {
-			manualBase += item.Value * float64(item.Qty)
-		}
+		// Marshalling do fragmento para a struct final de domínio
+		finalJSON, _ := json.Marshal(result.StateFragment)
+		var finalizedOrder domain.Order
+		json.Unmarshal(finalJSON, &finalizedOrder)
 
-		// 3. Hidratação Segura (Evitando Panic e 0s indesejados)
-		if val, ok := result.StateFragment["baseValue"].(float64); ok && val > 0 {
-			order.BaseValue = val
-		} else {
-			order.BaseValue = manualBase // Fallback
-		}
+		finalizedOrder.CorrelationID = "CORR-" + finalizedOrder.ID
 
-		if val, ok := result.StateFragment["totalValue"].(float64); ok {
-			order.TotalValue = val
-		} else {
-			order.TotalValue = order.BaseValue // Se não houver taxas/descontos
-		}
-
-		// Mapear Impostos
-		order.AppliedTaxes = make(map[string]float64)
-		if vat, ok := result.StateFragment["appliedTaxes.VAT"].(float64); ok {
-			order.AppliedTaxes["VAT"] = vat
-		}
-
-		order.RulesVersion = result.RulesVersion
-		order.CorrelationID = "CORR-" + order.ID
-
-		// Persistência
+		// Persistência simples
 		var sales []domain.Order
 		file, _ := os.ReadFile("db/sales.json")
 		json.Unmarshal(file, &sales)
-		sales = append(sales, order)
-
+		sales = append(sales, finalizedOrder)
 		newData, _ := json.MarshalIndent(sales, "", "  ")
 		os.WriteFile("db/sales.json", newData, 0644)
 
-		return c.JSON(http.StatusCreated, order)
-	})
-
-	e.Logger.Fatal(e.Start(":8080"))
+		return c.JSON(http.StatusCreated, finalizedOrder)
+	}
 }
