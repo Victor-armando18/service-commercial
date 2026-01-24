@@ -78,5 +78,25 @@
     "totalValue": 1368,
     "rulesVersion": "v1.2",
     "correlationId": "CORR-SALE-20260124040001"
+  },
+  {
+    "id": "SALE-20260124041402",
+    "currency": "USD",
+    "baseValue": 2500,
+    "items": [
+      {
+        "sku": "PROD-002",
+        "value": 2500,
+        "qty": 1
+      }
+    ],
+    "appliedTaxes": {
+      "VAT": 500
+    },
+    "totalItems": 1,
+    "discountPercentage": 0,
+    "totalValue": 3000,
+    "rulesVersion": "v1.2",
+    "correlationId": "CORR-SALE-20260124041402"
   }
 ]
