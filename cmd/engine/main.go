@@ -15,37 +15,41 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+type PatchRequest struct {
+	Order domain.Order             `json:"order"`
+	Patch []map[string]interface{} `json:"patch"`
+}
+
 func main() {
 	e := echo.New()
 
-	// Middleware de segurança e CORS (Fundamental para PATCH/POST do Front)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodPost, http.MethodPatch, http.MethodOptions},
+		AllowMethods: []string{http.MethodPost, http.MethodPatch, http.MethodOptions, http.MethodGet},
 		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept},
 	}))
 
 	loader := infrastructure.NewFileRuleLoader()
 	executor := infrastructure.NewJsonLogicExecutor()
 
-	// Registro de operadores especializados para o pipeline de 6 fases
+	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
 	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
 
 	engineSvc := usecase.NewEngineService(loader, executor)
 
-	// Endpoints Profissionais
-	e.POST("/orders", handleCalculate(engineSvc)) // Reconciliação e Cálculo
-	e.POST("/sales", handleSale(engineSvc))       // Enforcement Final e Persistência
+	// Endpoints solicitados pelo CEO e Tech Lead
+	e.POST("/orders", handleCalculate(engineSvc))
+	e.PATCH("/orders", handlePatch(engineSvc))
+	e.POST("/sales", handleSale(engineSvc))
+	e.GET("/products", handleListProducts)
 
 	e.Logger.Fatal(e.Start(":8080"))
 }
 
-// PDP Mock: Consulta OPA para obter Capabilities e Constraints
-// Baseado no arquivo authz.rego fornecido: "order.discount.apply"
+// OPA PDP: Retorna Constraints conforme o authz.rego
 func consultOPA(permission string) (bool, float64) {
-	// Simula decisão do OPA: Usuário tem permissão, mas o limite (constraint) é 15% (0.15)
 	if permission == "order.discount.apply" {
-		return true, 0.15
+		return true, 0.15 // Constraint: Máximo 15%
 	}
 	return false, 0
 }
@@ -57,24 +61,49 @@ func handleCalculate(svc interfaces.EngineFacade) echo.HandlerFunc {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
 		}
 
-		// 1. OPA: Validar Constraint de Desconto (PEP Enforcement)
-		allowed, maxDiscount := consultOPA("order.discount.apply")
-		if !allowed || order.DiscountPercentage > maxDiscount {
-			// Retornamos um erro estruturado que o front usará para bloquear a UI
+		// Enforcement de Constraint OPA
+		_, maxDiscount := consultOPA("order.discount.apply")
+		if order.DiscountPercentage > maxDiscount {
 			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":   "Constraint Violation",
-				"reasons": []string{fmt.Sprintf("O desconto solicitado excede o limite permitido (Máx: %.0f%%)", maxDiscount*100)},
-				"block":   true,
+				"error":   "OPA Constraint Violation",
+				"reasons": []string{fmt.Sprintf("Desconto de %.0f%% excede o limite permitido pelo OPA (15%%).", order.DiscountPercentage*100)},
 			})
 		}
 
-		// 2. Engine: Executar Pipeline por Fases (Baseline -> OrderAdjust -> Taxes -> Guards)
-		result, err := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
+		result, err := svc.RunEngine(c.Request().Context(), order, "v1.2")
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
+		return c.JSON(http.StatusOK, result)
+	}
+}
 
-		// 3. Resposta rica com stateFragment e Guards
+func handlePatch(svc interfaces.EngineFacade) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		var req PatchRequest
+		if err := c.Bind(&req); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid patch request"})
+		}
+
+		patchBytes, _ := json.Marshal(req.Patch)
+		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
+		if err != nil {
+			return c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		}
+
+		// Re-validar contra OPA após o Patch
+		_, maxDiscount := consultOPA("order.discount.apply")
+		if updatedOrder.DiscountPercentage > maxDiscount {
+			return c.JSON(http.StatusForbidden, map[string]interface{}{
+				"error":   "OPA Constraint Violation (Post-Patch)",
+				"reasons": []string{"A alteração solicitada viola os limites de desconto."},
+			})
+		}
+
+		result, err := svc.RunEngine(c.Request().Context(), updatedOrder, "v1.2")
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return c.JSON(http.StatusOK, result)
 	}
 }
@@ -86,29 +115,30 @@ func handleSale(svc interfaces.EngineFacade) echo.HandlerFunc {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
 		}
 
-		// Enforcement de Segurança Máxima: Re-executa Guards antes de persistir
-		result, _ := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
+		// Enforcement Final (Guards)
+		result, _ := svc.RunEngine(c.Request().Context(), order, "v1.2")
 		if len(result.GuardsHit) > 0 {
-			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":  "Security Guard Block",
-				"guards": result.GuardsHit,
-			})
+			return c.JSON(http.StatusForbidden, map[string]interface{}{"error": "Blocked by Guards", "guards": result.GuardsHit})
 		}
 
-		// Idempotência e Metadados
 		order.ID = "SALE-" + time.Now().Format("20060102150405")
 		order.CorrelationID = "CORR-" + order.ID
 
-		// Persistência em data/db/sales.json
-		filePath := "data/db/sales.json"
+		// Persistência
 		var sales []domain.Order
-		fileData, _ := os.ReadFile(filePath)
-		json.Unmarshal(fileData, &sales)
+		file, _ := os.ReadFile("data/db/sales.json")
+		json.Unmarshal(file, &sales)
 		sales = append(sales, order)
-
-		finalJSON, _ := json.MarshalIndent(sales, "", "  ")
-		os.WriteFile(filePath, finalJSON, 0644)
+		data, _ := json.MarshalIndent(sales, "", "  ")
+		os.WriteFile("data/db/sales.json", data, 0644)
 
 		return c.JSON(http.StatusCreated, order)
 	}
+}
+
+func handleListProducts(c echo.Context) error {
+	data, _ := os.ReadFile("data/db/products.json")
+	var products []interface{}
+	json.Unmarshal(data, &products)
+	return c.JSON(http.StatusOK, products)
 }

@@ -1,31 +1,66 @@
 [
   {
-    "id": "SALE-20260124024307",
+    "id": "SALE-20260124033914",
     "currency": "AOA",
-    "baseValue": 251200,
+    "baseValue": 2125,
+    "items": [
+      {
+        "sku": "PROD-002",
+        "value": 2500,
+        "qty": 1
+      }
+    ],
+    "appliedTaxes": {
+      "VAT": 297.5
+    },
+    "totalItems": 1,
+    "discountPercentage": 0.15,
+    "totalValue": 2422.5,
+    "rulesVersion": "v1.2",
+    "correlationId": "CORR-SALE-20260124033914"
+  },
+  {
+    "id": "SALE-20260124035605",
+    "currency": "BRL",
+    "baseValue": 6.71,
     "items": [
       {
         "sku": "PROD-001",
         "value": 1200,
         "qty": 1
-      },
+      }
+    ],
+    "appliedTaxes": {
+      "VAT": 228
+    },
+    "totalItems": 1,
+    "discountPercentage": 0.05,
+    "totalValue": 8.05,
+    "rulesVersion": "v1.2",
+    "correlationId": "CORR-SALE-20260124035605"
+  },
+  {
+    "id": "SALE-20260124035719",
+    "currency": "AOA",
+    "baseValue": 2375,
+    "items": [
       {
-        "sku": "PROD-003",
-        "value": 250000,
+        "sku": "PROD-002",
+        "value": 2500,
         "qty": 1
       }
     ],
     "appliedTaxes": {
-      "VAT": 35168
+      "VAT": 332.5
     },
-    "totalItems": 2,
-    "discountPercentage": 0,
-    "totalValue": 286368,
+    "totalItems": 1,
+    "discountPercentage": 0.05,
+    "totalValue": 2707.5,
     "rulesVersion": "v1.2",
-    "correlationId": ""
+    "correlationId": "CORR-SALE-20260124035719"
   },
   {
-    "id": "SALE-20260124024858",
+    "id": "SALE-20260124040001",
     "currency": "AOA",
     "baseValue": 1200,
     "items": [
@@ -42,6 +77,6 @@
     "discountPercentage": 0,
     "totalValue": 1368,
     "rulesVersion": "v1.2",
-    "correlationId": ""
+    "correlationId": "CORR-SALE-20260124040001"
   }
 ]

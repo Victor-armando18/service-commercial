@@ -2,273 +2,273 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <title>Dolphin POS | Enterprise</title>
+    <title>Dolphin Commercial | Enterprise POS</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .toast-enter { transform: translate(-50%, 100%); opacity: 0; }
-        .toast-show { transform: translate(-50%, 0); opacity: 1; }
-        .modal-bg { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px); }
-        input[type=range] { accent-color: #4f46e5; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #f8fafc; }
+        .product-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .product-card:hover { transform: translateY(-4px); }
+        .toast-active { transform: translate(-50%, 0) !important; opacity: 1 !important; }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     </style>
 </head>
 <body class="h-screen flex overflow-hidden">
 
-    <div id="cancelModal" class="hidden fixed inset-0 z-[200] flex items-center justify-center p-4 modal-bg">
-        <div class="bg-white rounded-[2rem] p-8 max-w-sm w-full shadow-2xl">
-            <h3 class="text-xl font-bold text-slate-800 mb-2">Cancelar esta venda?</h3>
-            <p class="text-slate-500 text-sm mb-6">Esta ação irá esvaziar o carrinho e resetar todos os descontos aplicados.</p>
-            <div class="flex gap-3">
-                <button onclick="closeModal()" class="flex-1 py-3 rounded-xl font-bold bg-slate-100 text-slate-600">Manter Itens</button>
-                <button onclick="confirmClearCart()" class="flex-1 py-3 rounded-xl font-bold bg-rose-500 text-white shadow-lg shadow-rose-200">Confirmar</button>
+    <div id="toastContainer" class="fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-3 pointer-events-none"></div>
+
+    <aside class="w-80 bg-slate-900 text-white flex flex-col p-8 shadow-2xl z-20">
+        <div class="mb-12 flex items-center gap-4">
+            <div class="h-12 w-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <i class="fas fa-anchor text-xl"></i>
+            </div>
+            <span class="font-black text-xl tracking-tighter uppercase">Dolphin<span class="text-blue-500 italic">Commercial</span></span>
+        </div>
+
+        <div class="space-y-8 flex-1">
+            <div>
+                <label class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Moeda de Operação</label>
+                <select id="currency" onchange="sync()" class="w-full mt-3 bg-slate-800 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
+                    <option value="AOA">Kwanza (Kz)</option>
+                    <option value="USD">Dólar (USD)</option>
+                    <option value="BRL">Real (R$)</option>
+                    <option value="EUR">Euro (€)</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Desconto Global (%)</label>
+                <input type="number" id="discountPct" value="0" min="0" oninput="sync()" class="w-full mt-3 bg-slate-800 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-blue-500">
+                <p class="text-[10px] text-blue-400/80 mt-3 font-semibold flex items-center gap-2">
+                    <i class="fas fa-shield-halved"></i> OPA Max Constraint: 15%
+                </p>
             </div>
         </div>
-    </div>
 
-    <div id="toastContainer" class="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-3"></div>
+        <button onclick="cancelOperation()" class="w-full group bg-slate-800/50 hover:bg-red-500/10 text-slate-500 hover:text-red-500 py-5 rounded-2xl text-xs font-black transition-all border border-slate-700 hover:border-red-500/30 flex items-center justify-center gap-3">
+            <i class="fas fa-trash-alt group-hover:shake transition-transform"></i> CANCELAR VENDA
+        </button>
+    </aside>
 
-    <div class="flex-1 flex flex-col bg-white">
-        <header class="p-8 border-b flex justify-between items-center">
-            <h1 class="text-2xl font-black text-indigo-600 tracking-tighter uppercase">Dolphin POS</h1>
-            <div class="flex items-center gap-4">
-                <select id="currency" onchange="updateCart()" class="bg-slate-100 border-none rounded-xl px-4 py-2 text-sm font-bold">
-                    <option value="AOA">AOA (Kwanzas)</option>
-                    <option value="USD">USD (Dólares)</option>
-                    <option value="EUR">EUR (Euros)</option>
-                </select>
-                <button onclick="openModal()" class="text-slate-400 hover:text-rose-500 font-bold text-xs">CANCELAR VENDA</button>
+    <main class="flex-1 flex flex-col overflow-hidden">
+        <header class="h-24 bg-white/80 backdrop-blur-md border-b px-10 flex items-center justify-between">
+            <h1 class="font-black text-slate-800 uppercase tracking-widest text-xs">Catálogo de Artigos</h1>
+            <div id="status" class="flex items-center gap-3 text-[10px] font-black text-green-500 bg-green-50 border border-green-100 px-4 py-2 rounded-full">
+                <span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span> PDP/PEP SYNC ACTIVE
             </div>
         </header>
 
-        <div class="p-8">
-            <div class="relative">
-                <i data-lucide="search" class="absolute left-4 top-3.5 text-slate-300 w-5 h-5"></i>
-                <input type="text" id="search" placeholder="Buscar produto..." class="w-full bg-slate-50 border-none rounded-2xl py-3.5 pl-12 pr-4 focus:ring-2 focus:ring-indigo-500/20 outline-none">
-            </div>
-        </div>
+        <div id="grid" class="p-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 overflow-y-auto custom-scroll"></div>
+    </main>
 
-        <div id="grid" class="flex-1 overflow-y-auto p-8 grid grid-cols-3 gap-6"></div>
-    </div>
-
-    <div class="w-[480px] bg-white border-l shadow-2xl flex flex-col">
+    <aside class="w-[480px] bg-white border-l shadow-2xl flex flex-col z-10">
         <div class="p-8 border-b flex justify-between items-center">
-            <h2 class="font-bold flex items-center gap-2"><i data-lucide="shopping-cart" class="text-indigo-600"></i> Carrinho</h2>
-            <span id="itemCount" class="text-xs font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg">0 ITENS</span>
+            <h2 class="font-black text-xl tracking-tight">CARRINHO</h2>
+            <button onclick="clearItems(true)" class="text-[10px] font-black text-slate-400 hover:text-red-500 uppercase tracking-widest transition-colors">Limpar Tudo</button>
         </div>
+        
+        <div id="cartList" class="flex-1 p-8 space-y-4 overflow-y-auto bg-slate-50/30 custom-scroll"></div>
 
-        <div id="cartItems" class="flex-1 overflow-y-auto p-8 space-y-4"></div>
-
-        <div class="p-8 bg-slate-900 text-white rounded-t-[3rem] space-y-6">
-            <div class="space-y-4">
-                <div class="flex justify-between items-center">
-                    <label class="text-[10px] font-bold text-slate-500 uppercase">Desconto Global</label>
-                    <div class="flex items-center gap-2">
-                        <input type="number" id="discInp" value="0" min="0" max="100" oninput="syncDisc('inp')" class="bg-transparent text-right w-10 border-b border-slate-700 outline-none font-bold text-indigo-400">
-                        <span class="text-indigo-400 font-bold text-xs">%</span>
-                    </div>
+        <div class="p-10 bg-white border-t space-y-5 shadow-[0_-10px_40px_rgba(0,0,0,0.02)]">
+            <div class="space-y-3">
+                <div class="flex justify-between text-sm font-bold text-slate-400 italic"><span>Subtotal Bruto</span><span id="resRaw">0,00</span></div>
+                <div class="flex justify-between text-sm font-bold text-green-600 bg-green-50 p-3 rounded-2xl">
+                    <span>Desconto Aplicado (Delta)</span>
+                    <span id="resDiscount">0,00</span>
                 </div>
-                <input type="range" id="discRange" min="0" max="100" value="0" oninput="syncDisc('range')" class="w-full">
-            </div>
-
-            <div class="pt-6 border-t border-slate-800 space-y-3">
-                <div class="flex justify-between text-xs text-slate-400">
-                    <span>Subtotal Bruto</span>
-                    <span id="resBase">0,00</span>
-                </div>
-                <div class="flex justify-between text-xs text-rose-400">
-                    <span>Desconto Aplicado (-)</span>
-                    <span id="resDiscVal">0,00</span>
-                </div>
-                <div class="flex justify-between text-xs text-indigo-400">
-                    <span>IVA/Taxas (+)</span>
-                    <span id="resTaxes">0,00</span>
-                </div>
-                <div class="flex justify-between items-end pt-4">
-                    <span class="font-bold text-slate-200">TOTAL FINAL</span>
-                    <span id="resTotal" class="text-5xl font-black tracking-tighter">0,00</span>
+                <div class="flex justify-between text-sm font-bold text-slate-400"><span>Impostos Calculados</span><span id="resTax">0,00</span></div>
+                <div class="flex justify-between font-black text-3xl pt-5 border-t text-slate-900 tracking-tighter">
+                    <span>TOTAL</span>
+                    <span id="resTotal" class="text-blue-600 font-[900]">0,00</span>
                 </div>
             </div>
 
-            <div id="guardAlert" class="hidden p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex gap-3">
-                <i data-lucide="shield-off" class="w-5 h-5 text-rose-500 shrink-0"></i>
-                <p id="guardMsg" class="text-[11px] text-rose-200 font-medium"></p>
+            <div id="errorBox" class="hidden p-5 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-xs font-black flex items-start gap-4">
+                <i class="fas fa-shield-alt text-lg"></i>
+                <span id="errorMsg"></span>
             </div>
 
-            <button onclick="finalizeSale()" id="btnFinalize" class="w-full bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-5 rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95">
-                <i data-lucide="check-circle" class="w-5 h-5"></i> FINALIZAR VENDA
+            <button id="btnSubmit" onclick="commit()" class="w-full bg-slate-900 hover:bg-blue-600 text-white py-6 rounded-3xl font-black text-lg transition-all flex items-center justify-center gap-3 shadow-xl active:scale-95 disabled:opacity-20 disabled:grayscale">
+                <i class="fas fa-check-circle"></i> CONFIRMAR E PERSISTIR
             </button>
         </div>
-    </div>
+    </aside>
 
     <script>
-        let products = [];
-        let cart = JSON.parse(localStorage.getItem('dolphin_cart')) || [];
-        const fx = { AOA: 1, USD: 0.0012, EUR: 0.0011 };
+        const API = "http://localhost:8080";
+        const catalog = [
+            {"sku": "PROD-001", "name": "Arroz Super 1kg", "value": 1200.0},
+            {"sku": "PROD-002", "name": "Óleo Alimentar 1L", "value": 2500.0},
+            {"sku": "PROD-003", "name": "iPhone 13 128GB", "value": 250000.0},
+            {"sku": "PROD-005", "name": "iPhone 15 Pro Max", "value": 1500000.0}
+        ];
 
-        function openModal() { if(cart.length > 0) document.getElementById('cancelModal').classList.remove('hidden'); }
-        function closeModal() { document.getElementById('cancelModal').classList.add('hidden'); }
+        // Carregar carrinho do LocalStorage para persistência
+        let cart = JSON.parse(localStorage.getItem('dolphin_cart')) || [];
+        let engineState = null;
 
         function notify(msg, type = 'success') {
             const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `${type === 'success' ? 'bg-slate-900 border-indigo-500' : 'bg-rose-600 border-rose-400'} text-white border-l-4 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 min-w-[300px] transition-all duration-500 toast-enter`;
-            toast.innerHTML = `<i data-lucide="${type === 'success' ? 'check-circle' : 'alert-octagon'}" class="w-5 h-5"></i> <span class="text-sm font-bold">${msg}</span>`;
-            container.appendChild(toast);
-            lucide.createIcons();
-            setTimeout(() => toast.classList.add('toast-show'), 10);
-            setTimeout(() => { toast.classList.remove('toast-show'); setTimeout(() => toast.remove(), 500); }, 4000);
+            const t = document.createElement('div');
+            t.className = `px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-4 font-black text-[11px] text-white opacity-0 -translate-y-4 transition-all pointer-events-auto border-b-4 ${type === 'success' ? 'bg-green-600 border-green-800' : 'bg-red-600 border-red-800'}`;
+            t.innerHTML = `<i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i> <span>${msg.toUpperCase()}</span>`;
+            container.appendChild(t);
+            setTimeout(() => t.classList.add('toast-active'), 10);
+            setTimeout(() => { 
+                t.classList.remove('toast-active'); 
+                setTimeout(() => t.remove(), 500); 
+            }, 3500);
         }
 
-        async function init() {
-            lucide.createIcons();
-            const resp = await fetch('http://localhost:8080/products');
-            products = await resp.json();
-            renderProducts(products);
-            if(cart.length > 0) updateCart();
-        }
-
-        function renderProducts(list) {
-            const grid = document.getElementById('grid');
-            grid.innerHTML = list.map(p => `
-                <div onclick="addToCart('${p.sku}')" class="bg-white border p-6 rounded-[2rem] hover:shadow-xl transition-all cursor-pointer group">
-                    <div class="w-12 h-12 bg-slate-50 rounded-xl mb-4 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white">
-                        <i data-lucide="package" class="w-6 h-6"></i>
+        function render() {
+            document.getElementById('grid').innerHTML = catalog.map(p => `
+                <div onclick="add('${p.sku}')" class="product-card bg-white p-8 rounded-[2.5rem] border border-slate-100 hover:border-blue-500 cursor-pointer transition-all shadow-sm hover:shadow-xl group">
+                    <h3 class="font-black text-slate-800 text-[11px] uppercase tracking-tight h-8 leading-tight">${p.name}</h3>
+                    <div class="mt-6 flex justify-between items-end">
+                        <span class="text-xl font-black text-blue-600 tracking-tighter">${fmt(p.value)}</span>
+                        <div class="h-10 w-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                            <i class="fas fa-plus"></i>
+                        </div>
                     </div>
-                    <h3 class="font-bold text-slate-800 text-sm mb-1 line-clamp-1">${p.name}</h3>
-                    <p class="text-xs font-black text-indigo-600">${formatValue(p.value)}</p>
                 </div>
             `).join('');
-            lucide.createIcons();
+            sync(); // Garante que a UI atualize ao carregar a página
         }
 
-        function syncDisc(src) {
-            const r = document.getElementById('discRange');
-            const i = document.getElementById('discInp');
-            src === 'range' ? i.value = r.value : r.value = i.value;
-            updateCart();
-        }
-
-        function formatValue(v) {
-            const cur = document.getElementById('currency').value;
-            const converted = (v || 0) * fx[cur];
-            return isNaN(converted) ? "0,00" : converted.toLocaleString('pt-AO', { style: 'currency', currency: cur });
-        }
-
-        function addToCart(sku) {
-            const p = products.find(i => i.sku === sku);
+        function add(sku) {
             const item = cart.find(i => i.sku === sku);
-            item ? item.qty++ : cart.push({ ...p, qty: 1 });
-            save();
+            if(item) item.qty++; else cart.push({...catalog.find(p => p.sku === sku), qty: 1});
+            saveAndSync();
         }
 
-        // FUNÇÃO DE RESET TOTAL
-        function fullReset() {
-            cart = [];
-            localStorage.removeItem('dolphin_cart');
-            
-            // RESET DOS CAMPOS DE DESCONTO
-            document.getElementById('discInp').value = 0;
-            document.getElementById('discRange').value = 0;
-            
-            updateCart();
+        function remove(sku) {
+            cart = cart.filter(i => i.sku !== sku);
+            saveAndSync();
         }
 
-        function confirmClearCart() { 
-            fullReset();
-            closeModal(); 
-        }
-
-        function save() {
+        function saveAndSync() {
             localStorage.setItem('dolphin_cart', JSON.stringify(cart));
-            updateCart();
+            sync();
         }
 
-        async function updateCart() {
-            const disc = parseInt(document.getElementById('discInp').value) || 0;
-            renderCart();
-            if (cart.length === 0) return resetUI();
+        async function sync() {
+            updateCartUI();
+            if(cart.length === 0) return resetUI();
 
-            const resp = await fetch('http://localhost:8080/orders?version=1.1', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    items: cart.map(i => ({ sku: i.sku, value: i.value, qty: i.qty })),
-                    discountPercentage: disc / 100
-                })
-            });
-            const result = await resp.json();
-
-            let manualSubtotal = cart.reduce((acc, i) => acc + (i.value * i.qty), 0);
-            let baseCalculada = result.stateFragment.baseValue || manualSubtotal;
-
-            document.getElementById('resBase').innerText = formatValue(baseCalculada);
-            let discountAmount = baseCalculada * (disc / 100);
-            document.getElementById('resDiscVal').innerText = `- ${formatValue(discountAmount)}`;
-            document.getElementById('resTaxes').innerText = formatValue(result.stateFragment["appliedTaxes.VAT"] || 0);
-            document.getElementById('resTotal').innerText = formatValue(result.stateFragment.totalValue || baseCalculada);
-
-            const alert = document.getElementById('guardAlert');
-            const btn = document.getElementById('btnFinalize');
-            if (result.guardsHit && result.guardsHit.length > 0) {
-                alert.classList.remove('hidden');
-                document.getElementById('guardMsg').innerText = result.guardsHit[0].context;
-                btn.disabled = true;
-            } else {
-                alert.classList.add('hidden');
-                btn.disabled = false;
-            }
-        }
-
-        function renderCart() {
-            const container = document.getElementById('cartItems');
-            document.getElementById('itemCount').innerText = `${cart.length} ITENS`;
-            container.innerHTML = cart.map((i, idx) => `
-                <div class="flex justify-between items-center bg-slate-50 p-4 rounded-2xl">
-                    <div>
-                        <p class="text-sm font-bold text-slate-800">${i.name}</p>
-                        <p class="text-[10px] text-slate-400 font-black uppercase">${i.qty}x | ${formatValue(i.value)}</p>
-                    </div>
-                    <button onclick="cart.splice(${idx},1); save()" class="text-slate-300 hover:text-rose-500"><i data-lucide="x" class="w-4 h-4"></i></button>
-                </div>
-            `).join('');
-            lucide.createIcons();
-        }
-
-        function resetUI() {
-            document.getElementById('resBase').innerText = formatValue(0);
-            document.getElementById('resDiscVal').innerText = formatValue(0);
-            document.getElementById('resTaxes').innerText = formatValue(0);
-            document.getElementById('resTotal').innerText = formatValue(0);
-            document.getElementById('guardAlert').classList.add('hidden');
-            // Não limpamos os inputs aqui para permitir que o user ajuste o desconto antes de colocar itens
-        }
-
-        async function finalizeSale() {
-            if (cart.length === 0) return;
-            const sale = {
-                id: "SALE-" + Date.now(),
+            const payload = {
                 currency: document.getElementById('currency').value,
-                items: cart.map(i => ({ sku: i.sku, value: i.value, qty: i.qty })),
-                discountPercentage: (parseInt(document.getElementById('discInp').value) || 0) / 100
+                discountPercentage: parseFloat(document.getElementById('discountPct').value) / 100 || 0,
+                rulesVersion: "v1.2",
+                items: cart.map(i => ({ sku: i.sku, value: i.value, qty: i.qty }))
             };
 
-            const resp = await fetch('http://localhost:8080/sales', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(sale)
-            });
-
-            if (resp.ok) { 
-                notify("Venda realizada com sucesso!"); 
-                fullReset(); // Reset completo após sucesso
-            } else { 
-                const err = await resp.json(); notify(err.reason || "Erro ao salvar", "error"); 
+            try {
+                const res = await fetch(`${API}/orders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (!res.ok) {
+                    handleError(data.reasons ? data.reasons[0] : data.error);
+                } else if (data.guardsHit && data.guardsHit.length > 0) {
+                    handleError(data.guardsHit[0].reason);
+                } else {
+                    engineState = data;
+                    applyUI(data);
+                }
+            } catch (e) { 
+                console.error(e);
+                notify("Dolphin Engine offline ou inacessível", "error"); 
             }
         }
 
-        init();
+        function handleError(msg) {
+            document.getElementById('errorMsg').innerText = msg;
+            document.getElementById('errorBox').classList.remove('hidden');
+            document.getElementById('btnSubmit').disabled = true;
+            notify(msg, "error");
+        }
+
+        function applyUI(data) {
+            const s = data.stateFragment;
+            const raw = cart.reduce((acc, i) => acc + (i.value * i.qty), 0);
+            document.getElementById('resRaw').innerText = fmt(raw);
+            document.getElementById('resDiscount').innerText = "- " + fmt(raw - s.baseValue);
+            document.getElementById('resTax').innerText = fmt(s.appliedTaxes?.VAT || 0);
+            document.getElementById('resTotal').innerText = fmt(s.totalValue);
+            document.getElementById('errorBox').classList.add('hidden');
+            document.getElementById('btnSubmit').disabled = false;
+        }
+
+        async function commit() {
+            if(!engineState) return;
+            try {
+                const res = await fetch(`${API}/sales`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({...engineState.stateFragment, items: cart.map(i => ({sku:i.sku, value:i.value, qty:i.qty}))})
+                });
+                if(res.ok) { 
+                    notify("Operação Finalizada com Sucesso", "success"); 
+                    clearItems(false); 
+                } else {
+                    const err = await res.json();
+                    notify(err.error || "Erro no enforcement final", "error");
+                }
+            } catch (e) { notify("Erro ao persistir venda", "error"); }
+        }
+
+        function cancelOperation() { 
+            if(cart.length > 0) {
+                clearItems(false); 
+                notify("Venda Cancelada pelo Utilizador", "error"); 
+            }
+        }
+        
+        function clearItems(notifyUser) { 
+            cart = []; 
+            localStorage.removeItem('dolphin_cart');
+            resetUI(); 
+            updateCartUI(); 
+            if(notifyUser) notify("Carrinho Limpo", "success");
+        }
+
+        function updateCartUI() {
+            document.getElementById('cartList').innerHTML = cart.map(i => `
+                <div class="group flex justify-between items-center p-5 bg-white rounded-3xl border border-slate-100 shadow-sm hover:border-red-100 transition-all">
+                    <div class="flex flex-col">
+                        <span class="font-black text-[11px] text-slate-800 uppercase tracking-tighter">${i.name}</span>
+                        <span class="text-[10px] text-slate-400 font-bold">${i.qty} x ${fmt(i.value)}</span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="font-black text-xs text-slate-900">${fmt(i.value * i.qty)}</span>
+                        <button onclick="remove('${i.sku}')" class="h-8 w-8 rounded-full flex items-center justify-center text-slate-300 hover:bg-red-50 hover:text-red-500 transition-all">
+                            <i class="fas fa-minus-circle"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function fmt(v) { 
+            const cur = document.getElementById('currency').value;
+            const locales = { 'AOA': 'pt-AO', 'USD': 'en-US', 'BRL': 'pt-BR', 'EUR': 'de-DE' };
+            return new Intl.NumberFormat(locales[cur] || 'pt-AO', { style: 'currency', currency: cur }).format(v); 
+        }
+
+        function resetUI() { 
+            ['resRaw', 'resDiscount', 'resTax', 'resTotal'].forEach(id => document.getElementById(id).innerText = fmt(0));
+            document.getElementById('errorBox').classList.add('hidden');
+            document.getElementById('btnSubmit').disabled = true;
+            document.getElementById('discountPct').value = 0;
+            engineState = null;
+        }
+
+        render();
     </script>
 </body>
 </html>
