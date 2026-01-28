@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Victor-armando18/service-commercial/internal/domain"
@@ -13,6 +13,11 @@ import (
 	"github.com/Victor-armando18/service-commercial/internal/usecase"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+)
+
+var (
+	idempotencyStorage = make(map[string][]byte)
+	idempotencyMu      sync.RWMutex
 )
 
 type PatchRequest struct {
@@ -26,83 +31,77 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodPost, http.MethodPatch, http.MethodOptions, http.MethodGet},
-		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept},
+		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept, "X-Tenant-ID", "Idempotency-Key", "X-Correlation-ID"},
 	}))
 
 	loader := infrastructure.NewFileRuleLoader()
 	executor := infrastructure.NewJsonLogicExecutor()
-
 	executor.RegisterCustomOperator("allocate", infrastructure.CustomAllocate)
 	executor.RegisterCustomOperator("round", infrastructure.CustomRound)
 
 	engineSvc := usecase.NewEngineService(loader, executor)
 
-	// Endpoints solicitados pelo CEO e Tech Lead
 	e.POST("/orders", handleCalculate(engineSvc))
-	e.PATCH("/orders", handlePatch(engineSvc))
+	e.POST("/orders/patch", handlePatch(engineSvc))
 	e.POST("/sales", handleSale(engineSvc))
-	e.GET("/products", handleListProducts)
 
 	e.Logger.Fatal(e.Start(":8080"))
 }
 
-// OPA PDP: Retorna Constraints conforme o authz.rego
-func consultOPA(permission string) (bool, float64) {
-	if permission == "order.discount.apply" {
-		return true, 0.15 // Constraint: Máximo 15%
+func handlePatch(svc interfaces.EngineFacade) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		tenantID := c.Request().Header.Get("X-Tenant-ID")
+		idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+
+		if idempotencyKey != "" {
+			idempotencyMu.RLock()
+			if val, ok := idempotencyStorage[idempotencyKey]; ok {
+				idempotencyMu.RUnlock()
+				return c.JSONBlob(http.StatusOK, val)
+			}
+			idempotencyMu.RUnlock()
+		}
+
+		var req PatchRequest
+		if err := c.Bind(&req); err != nil {
+			return errorRFC7807(c, http.StatusBadRequest, "Payload Inválido", err.Error())
+		}
+
+		patchBytes, _ := json.Marshal(req.Patch)
+		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
+		if err != nil {
+			return errorRFC7807(c, http.StatusUnprocessableEntity, "Erro no Patch", err.Error())
+		}
+
+		ctx := c.Request().Context()
+		result, err := svc.RunEngine(ctx, updatedOrder, updatedOrder.RulesVersion)
+		if err != nil {
+			return errorRFC7807(c, http.StatusInternalServerError, "Erro de Execução", err.Error())
+		}
+
+		result.StateFragment["tenantId"] = tenantID
+
+		if idempotencyKey != "" {
+			respBytes, _ := json.Marshal(result)
+			idempotencyMu.Lock()
+			idempotencyStorage[idempotencyKey] = respBytes
+			idempotencyMu.Unlock()
+		}
+
+		return c.JSON(http.StatusOK, result)
 	}
-	return false, 0
 }
 
 func handleCalculate(svc interfaces.EngineFacade) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
+			return errorRFC7807(c, http.StatusBadRequest, "Erro de Parsing", err.Error())
 		}
 
-		// Enforcement de Constraint OPA
-		_, maxDiscount := consultOPA("order.discount.apply")
-		if order.DiscountPercentage > maxDiscount {
-			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":   "OPA Constraint Violation",
-				"reasons": []string{fmt.Sprintf("Desconto de %.0f%% excede o limite permitido pelo OPA (15%%).", order.DiscountPercentage*100)},
-			})
-		}
-
-		result, err := svc.RunEngine(c.Request().Context(), order, "v1.2")
+		result, err := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-		return c.JSON(http.StatusOK, result)
-	}
-}
-
-func handlePatch(svc interfaces.EngineFacade) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		var req PatchRequest
-		if err := c.Bind(&req); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid patch request"})
-		}
-
-		patchBytes, _ := json.Marshal(req.Patch)
-		updatedOrder, err := infrastructure.ApplyOrderPatch(req.Order, patchBytes)
-		if err != nil {
-			return c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
-		}
-
-		// Re-validar contra OPA após o Patch
-		_, maxDiscount := consultOPA("order.discount.apply")
-		if updatedOrder.DiscountPercentage > maxDiscount {
-			return c.JSON(http.StatusForbidden, map[string]interface{}{
-				"error":   "OPA Constraint Violation (Post-Patch)",
-				"reasons": []string{"A alteração solicitada viola os limites de desconto."},
-			})
-		}
-
-		result, err := svc.RunEngine(c.Request().Context(), updatedOrder, "v1.2")
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return errorRFC7807(c, http.StatusInternalServerError, "Erro no Motor", err.Error())
 		}
 		return c.JSON(http.StatusOK, result)
 	}
@@ -112,33 +111,41 @@ func handleSale(svc interfaces.EngineFacade) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		var order domain.Order
 		if err := c.Bind(&order); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Payload inválido"})
+			return errorRFC7807(c, http.StatusBadRequest, "Venda Inválida", err.Error())
 		}
 
-		// Enforcement Final (Guards)
-		result, _ := svc.RunEngine(c.Request().Context(), order, "v1.2")
+		result, _ := svc.RunEngine(c.Request().Context(), order, order.RulesVersion)
 		if len(result.GuardsHit) > 0 {
-			return c.JSON(http.StatusForbidden, map[string]interface{}{"error": "Blocked by Guards", "guards": result.GuardsHit})
+			return c.JSON(http.StatusForbidden, map[string]interface{}{
+				"type":   "https://dolphin.com/err/guard-violation",
+				"title":  "Venda Bloqueada por Guardas",
+				"status": 403,
+				"detail": result.GuardsHit[0].Context,
+			})
 		}
 
 		order.ID = "SALE-" + time.Now().Format("20060102150405")
-		order.CorrelationID = "CORR-" + order.ID
 
-		// Persistência
-		var sales []domain.Order
-		file, _ := os.ReadFile("data/db/sales.json")
-		json.Unmarshal(file, &sales)
-		sales = append(sales, order)
-		data, _ := json.MarshalIndent(sales, "", "  ")
-		os.WriteFile("data/db/sales.json", data, 0644)
+		saveToJSON("data/db/sales.json", order)
 
 		return c.JSON(http.StatusCreated, order)
 	}
 }
 
-func handleListProducts(c echo.Context) error {
-	data, _ := os.ReadFile("data/db/products.json")
-	var products []interface{}
-	json.Unmarshal(data, &products)
-	return c.JSON(http.StatusOK, products)
+func errorRFC7807(c echo.Context, status int, title, detail string) error {
+	return c.JSON(status, map[string]interface{}{
+		"type":   "https://dolphin.com/errors",
+		"title":  title,
+		"status": status,
+		"detail": detail,
+	})
+}
+
+func saveToJSON(path string, data interface{}) {
+	var list []interface{}
+	file, _ := os.ReadFile(path)
+	json.Unmarshal(file, &list)
+	list = append(list, data)
+	newContent, _ := json.MarshalIndent(list, "", "  ")
+	os.WriteFile(path, newContent, 0644)
 }
